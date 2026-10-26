@@ -1,0 +1,43 @@
+name: cloud-worker keepalive
+
+# 作用：定时访问云签 worker 的 /health，把休眠的沙箱叫醒，让它跑完一整轮签到/猫猫旅行/成长任务。
+# 跑在 GitHub 的服务器上，跟你的电脑开不开机完全无关。
+
+on:
+  schedule:
+    # 注意：GitHub 的 cron 一律按 UTC 解析，北京时间 = UTC+8
+    # 这里 02:00 / 06:00 / 14:00 UTC  =  北京 10:00 / 14:00 / 22:00
+    - cron: "0 2,6,14 * * *"
+  # 允许在网页上手动点一下就跑，方便测试
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: keepalive
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Wake worker and verify
+        run: |
+          set -uo pipefail
+          URL="https://wb-cloud-worker-99359.app.workbuddy.host/health"
+          for i in 1 2 3; do
+            echo "---- attempt $i ----"
+            code=$(curl -sS -o /tmp/health.json -w '%{http_code}' \
+                   --max-time 120 --retry 0 "$URL" 2>/dev/null || echo 000)
+            echo "HTTP $code"
+            cat /tmp/health.json 2>/dev/null || true
+            echo
+            if [ "$code" = "200" ] && grep -q '"ok"[[:space:]]*:[[:space:]]*true' /tmp/health.json 2>/dev/null; then
+              echo "keepalive OK"
+              exit 0
+            fi
+            [ "$i" -lt 3 ] && sleep 30
+          done
+          echo "keepalive FAILED after 3 attempts"
+          exit 1
